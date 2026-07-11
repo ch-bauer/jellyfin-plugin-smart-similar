@@ -29,8 +29,11 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         private const double WriterPoints = 4;
         private const double ActorPoints = 3;
 
-        /// <summary>How many top base-scored candidates get the (per-item DB query) people pass.</summary>
-        private const int PeopleRerankCount = 150;
+        /// <summary>Cap on how many top base-scored candidates get the (per-item DB query) people pass.</summary>
+        private const int PeopleRerankCap = 150;
+
+        /// <summary>Concurrent people queries during the re-rank pass.</summary>
+        private const int PeopleQueryParallelism = 8;
 
         // A full scoring pass costs a candidate scan plus up to PeopleRerankCount
         // people queries, so the ranking is kept for a while. Metadata changes
@@ -63,8 +66,9 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         public IReadOnlyList<Guid> GetScored(BaseItem anchor, Guid userId, PluginConfiguration config)
         {
             // The ranking depends on the anchor, the user (library access
-            // filtering) and the score threshold - key on all three.
-            string cacheKey = $"{anchor.Id:N}:{userId:N}:{config.MinScore}";
+            // filtering), the score threshold and the re-rank width (derived
+            // from the result limit) - key on all of them.
+            string cacheKey = $"{anchor.Id:N}:{userId:N}:{config.MinScore}:{config.ResultLimit}";
             if (m_cache.TryGetValue(cacheKey, out CacheEntry? cached)
                 && DateTime.UtcNow - cached.BuiltAt < s_cacheTtl)
             {
@@ -127,13 +131,25 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
 
             scored.Sort(CompareScored);
 
-            // People pass: only for the best base-scored candidates.
-            int rerankCount = Math.Min(PeopleRerankCount, scored.Count);
-            if (anchorFeatures.HasPeople)
+            // People pass: only for the best base-scored candidates - people add
+            // at most 20 points, so anything far down the base ranking cannot
+            // reach the visible row anyway. Sized to the row, since each people
+            // lookup is a DB query; queried in parallel to keep cold requests fast.
+            int rerankCount = Math.Min(
+                Math.Min(PeopleRerankCap, Math.Max(config.ResultLimit * 4, 48)),
+                scored.Count);
+            if (anchorFeatures.HasPeople && rerankCount > 0)
             {
+                double[] peopleScores = new double[rerankCount];
+                Parallel.For(
+                    0,
+                    rerankCount,
+                    new ParallelOptions { MaxDegreeOfParallelism = PeopleQueryParallelism },
+                    i => peopleScores[i] = PeopleScore(anchorFeatures, scored[i].Item));
+
                 for (int i = 0; i < rerankCount; i++)
                 {
-                    scored[i] = scored[i] with { Score = scored[i].Score + PeopleScore(anchorFeatures, scored[i].Item) };
+                    scored[i] = scored[i] with { Score = scored[i].Score + peopleScores[i] };
                 }
 
                 scored.Sort(CompareScored);
