@@ -61,13 +61,6 @@ section is left untouched.
    `C:\ProgramData\Jellyfin\Server\plugins` on Windows).
 3. Restart Jellyfin, then hard-refresh the browser (Ctrl+F5).
 
-## Releasing a new version
-
-1. Bump `AssemblyVersion`/`FileVersion` in the csproj and `version`/`changelog` in `meta.json`.
-2. Commit, tag `v<version>` (e.g. `v1.0.0.0`), push the tag — the GitHub Actions workflow builds
-   the zip and creates the release (it prints the zip's MD5 in the build log).
-3. Add a new entry to `versions` in `manifest.json` (release asset URL + MD5 checksum) and push.
-
 ## How it works
 
 - A startup task registers a transformation for `index.html` with the File Transformation plugin
