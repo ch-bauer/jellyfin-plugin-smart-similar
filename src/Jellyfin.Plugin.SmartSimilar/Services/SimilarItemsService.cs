@@ -38,6 +38,8 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         public async Task<IReadOnlyList<Guid>> GetSimilarAsync(
             BaseItem anchor, Guid userId, PluginConfiguration config, CancellationToken cancellationToken)
         {
+            int limit = Math.Clamp(config.ResultLimit, 1, 64);
+
             HashSet<Guid> excluded = new HashSet<Guid> { anchor.Id };
 
             // Exclusion also works on TMDb ids: when the same movie exists as
@@ -51,9 +53,17 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             {
                 HashSet<Guid> siblings = m_collectionLookup.GetCollectionSiblings(anchor.Id);
                 excluded.UnionWith(siblings);
-                foreach (Guid siblingId in siblings)
+
+                // One batch query instead of a lookup per sibling - collections can be large.
+                if (siblings.Count > 0)
                 {
-                    AddTmdbId(excludedTmdbIds, m_libraryManager.GetItemById(siblingId));
+                    foreach (BaseItem sibling in m_libraryManager.GetItemList(new InternalItemsQuery
+                             {
+                                 ItemIds = siblings.ToArray()
+                             }))
+                    {
+                        AddTmdbId(excludedTmdbIds, sibling);
+                    }
                 }
             }
 
@@ -74,18 +84,33 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
                         ordered.Add(id);
                     }
                 }
+
+                if (config.ExcludeWatched)
+                {
+                    ordered = FilterUnplayed(ordered, userId);
+                }
             }
 
-            // Local scoring runs for: the Local provider, Hybrid fill, and as a
-            // fallback when TMDb contributed nothing usable - no key, no TMDb id,
-            // API error, or (in small libraries) every recommendation excluded.
-            if (config.Provider != "Tmdb" || ordered.Count == 0)
+            // Local scoring is the expensive step (full candidate scan), so it
+            // only runs when its results can actually appear in the row: the
+            // Local provider, Hybrid with unfilled slots, and Tmdb as fallback
+            // when TMDb contributed nothing usable (no key, no TMDb id, API
+            // error, or every recommendation excluded).
+            bool needLocal = config.Provider switch
+            {
+                "Tmdb" => ordered.Count == 0,
+                "Hybrid" => ordered.Count < limit,
+                _ => true
+            };
+
+            if (needLocal)
             {
                 if (config.Provider == "Tmdb")
                 {
                     m_logger.LogDebug("TMDb yielded no usable results for {Name}; using local scoring instead.", anchor.Name);
                 }
 
+                List<Guid> local = new List<Guid>();
                 foreach (Guid id in m_localProvider.GetScored(anchor, userId, config))
                 {
                     if (excluded.Contains(id))
@@ -95,33 +120,29 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
 
                     if (seen.Add(id))
                     {
-                        ordered.Add(id);
+                        local.Add(id);
+                    }
+
+                    // The filters below can only remove items, so a bounded
+                    // prefix of the ranking is enough to fill the row - and it
+                    // keeps the watched-filter query small.
+                    if (local.Count >= Math.Max(limit * 4, 64))
+                    {
+                        break;
                     }
                 }
-            }
 
-            List<Guid> filtered = ordered;
-
-            if (config.ExcludeWatched && filtered.Count > 0)
-            {
-                var user = userId == Guid.Empty ? null : m_userManager.GetUserById(userId);
-                if (user != null)
+                if (config.ExcludeWatched)
                 {
-                    HashSet<Guid> unplayed = m_libraryManager.GetItemList(new InternalItemsQuery(user)
-                        {
-                            ItemIds = filtered.ToArray(),
-                            IsPlayed = false
-                        })
-                        .Select(item => item.Id)
-                        .ToHashSet();
-                    filtered = filtered.Where(unplayed.Contains).ToList();
+                    local = FilterUnplayed(local, userId);
                 }
+
+                ordered.AddRange(local);
             }
 
-            int limit = Math.Clamp(config.ResultLimit, 1, 64);
             List<Guid> result = new List<Guid>(limit);
 
-            foreach (Guid id in filtered)
+            foreach (Guid id in ordered)
             {
                 if (result.Count == limit)
                 {
@@ -139,6 +160,30 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             }
 
             return result;
+        }
+
+        private List<Guid> FilterUnplayed(List<Guid> ids, Guid userId)
+        {
+            if (ids.Count == 0)
+            {
+                return ids;
+            }
+
+            var user = userId == Guid.Empty ? null : m_userManager.GetUserById(userId);
+            if (user == null)
+            {
+                return ids;
+            }
+
+            HashSet<Guid> unplayed = m_libraryManager.GetItemList(new InternalItemsQuery(user)
+                {
+                    ItemIds = ids.ToArray(),
+                    IsPlayed = false
+                })
+                .Select(item => item.Id)
+                .ToHashSet();
+
+            return ids.Where(unplayed.Contains).ToList();
         }
 
         private bool HasExcludedTmdbId(Guid id, HashSet<string> excludedTmdbIds)

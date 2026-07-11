@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.SmartSimilar.Configuration;
 using MediaBrowser.Controller.Entities;
@@ -31,6 +32,16 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         /// <summary>How many top base-scored candidates get the (per-item DB query) people pass.</summary>
         private const int PeopleRerankCount = 150;
 
+        // A full scoring pass costs a candidate scan plus up to PeopleRerankCount
+        // people queries, so the ranking is kept for a while. Metadata changes
+        // show up after at most the TTL - the same trade-off as the other caches.
+        private static readonly TimeSpan s_cacheTtl = TimeSpan.FromMinutes(10);
+        private const int MaxCacheEntries = 256;
+
+        private readonly ConcurrentDictionary<string, CacheEntry> m_cache = new();
+
+        private sealed record CacheEntry(DateTime BuiltAt, IReadOnlyList<Guid> Ids);
+
         private readonly ILibraryManager m_libraryManager;
         private readonly IUserManager m_userManager;
         private readonly ILogger<LocalScoringProvider> m_logger;
@@ -50,6 +61,47 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         /// best match first. The caller applies exclusions and the result limit.
         /// </summary>
         public IReadOnlyList<Guid> GetScored(BaseItem anchor, Guid userId, PluginConfiguration config)
+        {
+            // The ranking depends on the anchor, the user (library access
+            // filtering) and the score threshold - key on all three.
+            string cacheKey = $"{anchor.Id:N}:{userId:N}:{config.MinScore}";
+            if (m_cache.TryGetValue(cacheKey, out CacheEntry? cached)
+                && DateTime.UtcNow - cached.BuiltAt < s_cacheTtl)
+            {
+                return cached.Ids;
+            }
+
+            IReadOnlyList<Guid> scoredIds = ComputeScored(anchor, userId, config);
+            StoreInCache(cacheKey, scoredIds);
+            return scoredIds;
+        }
+
+        private void StoreInCache(string cacheKey, IReadOnlyList<Guid> ids)
+        {
+            if (m_cache.Count >= MaxCacheEntries)
+            {
+                // Drop the oldest entry; precise LRU is not worth the bookkeeping here.
+                string? oldestKey = null;
+                DateTime oldest = DateTime.MaxValue;
+                foreach (KeyValuePair<string, CacheEntry> entry in m_cache)
+                {
+                    if (entry.Value.BuiltAt < oldest)
+                    {
+                        oldest = entry.Value.BuiltAt;
+                        oldestKey = entry.Key;
+                    }
+                }
+
+                if (oldestKey != null)
+                {
+                    m_cache.TryRemove(oldestKey, out _);
+                }
+            }
+
+            m_cache[cacheKey] = new CacheEntry(DateTime.UtcNow, ids);
+        }
+
+        private IReadOnlyList<Guid> ComputeScored(BaseItem anchor, Guid userId, PluginConfiguration config)
         {
             var user = userId == Guid.Empty ? null : m_userManager.GetUserById(userId);
 
