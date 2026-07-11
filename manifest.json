@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/ch-bauer/jellyfin-plugin-smart-similar/main/images/icon.png",
     "versions": [
       {
+        "version": "1.0.1.0",
+        "changelog": "Fix collection filtering missing siblings in TMDb mode when a movie exists as several library items (copies/editions).",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/ch-bauer/jellyfin-plugin-smart-similar/releases/download/v1.0.1.0/smart-similar_1.0.1.0.zip",
+        "checksum": "90e8a9d594f64be98cad218dc09e6f6c",
+        "timestamp": "2026-07-11T00:00:00Z"
+      },
+      {
         "version": "1.0.0.0",
         "changelog": "Initial release.",
         "targetAbi": "10.11.0.0",
