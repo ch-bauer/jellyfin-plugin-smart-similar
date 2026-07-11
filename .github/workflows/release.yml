@@ -17,6 +17,9 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
+      - name: Test
+        run: dotnet test tests/Jellyfin.Plugin.SmartSimilar.Tests -c Release
+
       - name: Build
         run: dotnet publish src/Jellyfin.Plugin.SmartSimilar -c Release -o publish
 

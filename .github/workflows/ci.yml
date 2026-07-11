@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Build
+        run: dotnet build src/Jellyfin.Plugin.SmartSimilar -c Release
+
+      - name: Test
+        run: dotnet test tests/Jellyfin.Plugin.SmartSimilar.Tests -c Release

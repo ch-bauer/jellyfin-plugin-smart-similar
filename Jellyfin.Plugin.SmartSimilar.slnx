@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Jellyfin.Plugin.SmartSimilar/Jellyfin.Plugin.SmartSimilar.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Jellyfin.Plugin.SmartSimilar.Tests/Jellyfin.Plugin.SmartSimilar.Tests.csproj" />
+  </Folder>
 </Solution>
