@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.SmartSimilar.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.SmartSimilar.Services
@@ -38,9 +39,22 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             BaseItem anchor, Guid userId, PluginConfiguration config, CancellationToken cancellationToken)
         {
             HashSet<Guid> excluded = new HashSet<Guid> { anchor.Id };
+
+            // Exclusion also works on TMDb ids: when the same movie exists as
+            // several library items (copies in different libraries, editions),
+            // the collection links one item while the TMDb mapping may resolve
+            // to another - those siblings would slip past a pure id filter.
+            HashSet<string> excludedTmdbIds = new HashSet<string>(StringComparer.Ordinal);
+            AddTmdbId(excludedTmdbIds, anchor);
+
             if (config.ExcludeCollectionItems)
             {
-                excluded.UnionWith(m_collectionLookup.GetCollectionSiblings(anchor.Id));
+                HashSet<Guid> siblings = m_collectionLookup.GetCollectionSiblings(anchor.Id);
+                excluded.UnionWith(siblings);
+                foreach (Guid siblingId in siblings)
+                {
+                    AddTmdbId(excludedTmdbIds, m_libraryManager.GetItemById(siblingId));
+                }
             }
 
             List<Guid> ordered = new List<Guid>();
@@ -93,7 +107,42 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
                 }
             }
 
-            return filtered.Take(Math.Clamp(config.ResultLimit, 1, 64)).ToList();
+            int limit = Math.Clamp(config.ResultLimit, 1, 64);
+            List<Guid> result = new List<Guid>(limit);
+
+            foreach (Guid id in filtered)
+            {
+                if (result.Count == limit)
+                {
+                    break;
+                }
+
+                if (excludedTmdbIds.Count > 0)
+                {
+                    BaseItem? item = m_libraryManager.GetItemById(id);
+                    if (item != null
+                        && item.TryGetProviderId(MetadataProvider.Tmdb, out string? tmdbId)
+                        && !string.IsNullOrEmpty(tmdbId)
+                        && excludedTmdbIds.Contains(tmdbId))
+                    {
+                        continue;
+                    }
+                }
+
+                result.Add(id);
+            }
+
+            return result;
+        }
+
+        private static void AddTmdbId(HashSet<string> tmdbIds, BaseItem? item)
+        {
+            if (item != null
+                && item.TryGetProviderId(MetadataProvider.Tmdb, out string? tmdbId)
+                && !string.IsNullOrEmpty(tmdbId))
+            {
+                tmdbIds.Add(tmdbId);
+            }
         }
     }
 }

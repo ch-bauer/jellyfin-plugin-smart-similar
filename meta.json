@@ -1,6 +1,6 @@
 {
   "category": "General",
-  "changelog": "Initial release.",
+  "changelog": "Fix collection filtering missing siblings in TMDb mode when a movie exists as several library items (copies/editions).",
   "description": "Replaces the native \"More Like This\" section with better similarity results from a selectable provider, excluding items of the same collection.",
   "guid": "61b616fa-7ba8-4262-b2a9-fae29b015930",
   "imageUrl": "https://raw.githubusercontent.com/ch-bauer/jellyfin-plugin-smart-similar/main/images/icon.png",
@@ -9,7 +9,7 @@
   "owner": "Christian",
   "targetAbi": "10.11.0.0",
   "timestamp": "2026-07-11T00:00:00.000Z",
-  "version": "1.0.0.0",
+  "version": "1.0.1.0",
   "status": "Active",
   "autoUpdate": false
 }
