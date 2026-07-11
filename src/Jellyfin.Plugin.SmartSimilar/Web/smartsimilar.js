@@ -150,13 +150,18 @@
                 return;
             }
 
-            if (!data.active || !data.items.length) {
+            if (!data.active) {
                 deactivate(page);
                 return;
             }
 
+            // For supported item types the plugin owns the row - even with zero
+            // results the native section stays hidden (its results are exactly
+            // what this plugin exists to replace, e.g. collection siblings).
             removeSections(page);
-            insertSection(page, data.items, apiClient);
+            if (data.items.length) {
+                insertSection(page, data.items, apiClient);
+            }
         }).catch(function (err) {
             log('failed to render similar section', err);
             if (page.getAttribute(ITEM_ATTR) === itemId) {

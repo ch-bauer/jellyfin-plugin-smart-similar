@@ -64,6 +64,11 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             {
                 foreach (Guid id in await m_tmdbProvider.GetRecommendedAsync(anchor, config, cancellationToken).ConfigureAwait(false))
                 {
+                    if (excluded.Contains(id) || HasExcludedTmdbId(id, excludedTmdbIds))
+                    {
+                        continue;
+                    }
+
                     if (seen.Add(id))
                     {
                         ordered.Add(id);
@@ -72,16 +77,22 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             }
 
             // Local scoring runs for: the Local provider, Hybrid fill, and as a
-            // fallback when TMDb produced nothing (no key, no TMDb id, API error).
+            // fallback when TMDb contributed nothing usable - no key, no TMDb id,
+            // API error, or (in small libraries) every recommendation excluded.
             if (config.Provider != "Tmdb" || ordered.Count == 0)
             {
                 if (config.Provider == "Tmdb")
                 {
-                    m_logger.LogDebug("TMDb returned no results for {Name}; using local scoring instead.", anchor.Name);
+                    m_logger.LogDebug("TMDb yielded no usable results for {Name}; using local scoring instead.", anchor.Name);
                 }
 
                 foreach (Guid id in m_localProvider.GetScored(anchor, userId, config))
                 {
+                    if (excluded.Contains(id))
+                    {
+                        continue;
+                    }
+
                     if (seen.Add(id))
                     {
                         ordered.Add(id);
@@ -89,7 +100,7 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
                 }
             }
 
-            List<Guid> filtered = ordered.Where(id => !excluded.Contains(id)).ToList();
+            List<Guid> filtered = ordered;
 
             if (config.ExcludeWatched && filtered.Count > 0)
             {
@@ -117,22 +128,31 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
                     break;
                 }
 
-                if (excludedTmdbIds.Count > 0)
+                // Covers duplicate copies from the local list (the TMDb list is
+                // already tmdb-id-filtered); bounded by the result limit.
+                if (HasExcludedTmdbId(id, excludedTmdbIds))
                 {
-                    BaseItem? item = m_libraryManager.GetItemById(id);
-                    if (item != null
-                        && item.TryGetProviderId(MetadataProvider.Tmdb, out string? tmdbId)
-                        && !string.IsNullOrEmpty(tmdbId)
-                        && excludedTmdbIds.Contains(tmdbId))
-                    {
-                        continue;
-                    }
+                    continue;
                 }
 
                 result.Add(id);
             }
 
             return result;
+        }
+
+        private bool HasExcludedTmdbId(Guid id, HashSet<string> excludedTmdbIds)
+        {
+            if (excludedTmdbIds.Count == 0)
+            {
+                return false;
+            }
+
+            BaseItem? item = m_libraryManager.GetItemById(id);
+            return item != null
+                   && item.TryGetProviderId(MetadataProvider.Tmdb, out string? tmdbId)
+                   && !string.IsNullOrEmpty(tmdbId)
+                   && excludedTmdbIds.Contains(tmdbId);
         }
 
         private static void AddTmdbId(HashSet<string> tmdbIds, BaseItem? item)
