@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "61b616fa-7ba8-4262-b2a9-fae29b015930",
+    "name": "Smart Similar",
+    "description": "Replaces the native \"More Like This\" section with better similarity results from a selectable provider, excluding items of the same collection.",
+    "overview": "A better \"More Like This\" section.",
+    "owner": "Christian",
+    "category": "General",
+    "imageUrl": "https://raw.githubusercontent.com/ch-bauer/jellyfin-plugin-smart-similar/main/images/icon.png",
+    "versions": []
+  }
+]

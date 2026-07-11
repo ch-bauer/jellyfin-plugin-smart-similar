@@ -1,0 +1,9 @@
+/* Smart Similar plugin styles */
+
+/* While the plugin owns the similar row of a detail page, the native
+   "More Like This" section stays hidden - no matter when jellyfin-web
+   populates it. The attribute is removed again (restoring the native
+   section) when the plugin has nothing to show for an item. */
+.itemDetailPage[data-smartsimilar-active] #similarCollapsible {
+    display: none !important;
+}

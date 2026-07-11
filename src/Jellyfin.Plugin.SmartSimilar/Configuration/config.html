@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Smart Similar</title>
+</head>
+<body>
+<div id="SmartSimilarConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
+     data-require="emby-checkbox,emby-button,emby-input,emby-select">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="SmartSimilarConfigForm">
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Smart Similar</h2>
+                    <p>Replaces the native &quot;More Like This&quot; section on movie and series
+                        detail pages with better similarity results.</p>
+                </div>
+
+                <div class="selectContainer">
+                    <select is="emby-select" id="SmartSimilarProvider" label="Similarity provider">
+                        <option value="Local">Local smart scoring (library metadata)</option>
+                        <option value="Tmdb">TMDb recommendations</option>
+                        <option value="Hybrid">Hybrid (TMDb first, local fill)</option>
+                    </select>
+                    <div class="fieldDescription">
+                        Local scoring works instantly and offline. TMDb gives editorial-quality
+                        recommendations but only shows matches that exist in your library and
+                        needs an API key. Hybrid tops up thin TMDb results with local scoring.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="password" id="SmartSimilarTmdbKey"
+                           label="TMDb API key" autocomplete="off"/>
+                    <div class="fieldDescription">
+                        Only needed for the TMDb and Hybrid providers. Get a free key at
+                        themoviedb.org &rarr; Settings &rarr; API (both the v3 key and the v4
+                        read access token work).
+                    </div>
+                </div>
+                <button is="emby-button" type="button" id="SmartSimilarTestKey" class="raised block">
+                    <span>Test key</span>
+                </button>
+                <div id="SmartSimilarTestResult" class="fieldDescription" style="margin: 0.5em 0 1.5em;"></div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="SmartSimilarLimit"
+                           label="Maximum number of items" min="1" max="32" step="1"/>
+                </div>
+
+                <div class="checkboxContainer">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="SmartSimilarExcludeCollection"/>
+                        <span>Hide items from the same collection</span>
+                    </label>
+                    <div class="fieldDescription">
+                        Items that share a collection with the current item (sequels, sagas)
+                        are left out of the similar section.
+                    </div>
+                </div>
+
+                <div class="checkboxContainer">
+                    <label>
+                        <input is="emby-checkbox" type="checkbox" id="SmartSimilarExcludeWatched"/>
+                        <span>Hide watched items</span>
+                    </label>
+                    <div class="fieldDescription">
+                        A series counts as watched once all of its episodes are played.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="SmartSimilarMinScore"
+                           label="Minimum match score (0-100)" min="0" max="100" step="1"/>
+                    <div class="fieldDescription">
+                        Local scoring only: items below this similarity score are never shown.
+                        Raise it for stricter matches, lower it for fuller rows.
+                    </div>
+                </div>
+
+                <br/>
+                <button is="emby-button" type="submit" class="raised button-submit block">
+                    <span>Save</span>
+                </button>
+            </form>
+        </div>
+    </div>
+    <script type="text/javascript">
+        (function () {
+            var pluginId = '61b616fa-7ba8-4262-b2a9-fae29b015930';
+
+            function loadPage(page) {
+                Dashboard.showLoadingMsg();
+
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    page.querySelector('#SmartSimilarProvider').value = config.Provider || 'Local';
+                    page.querySelector('#SmartSimilarTmdbKey').value = config.TmdbApiKey || '';
+                    page.querySelector('#SmartSimilarLimit').value = config.ResultLimit || 16;
+                    page.querySelector('#SmartSimilarExcludeCollection').checked =
+                        config.ExcludeCollectionItems !== false;
+                    page.querySelector('#SmartSimilarExcludeWatched').checked = !!config.ExcludeWatched;
+                    page.querySelector('#SmartSimilarMinScore').value =
+                        config.MinScore === undefined || config.MinScore === null ? 15 : config.MinScore;
+                    Dashboard.hideLoadingMsg();
+                }).catch(function () {
+                    Dashboard.hideLoadingMsg();
+                });
+            }
+
+            function save(page) {
+                Dashboard.showLoadingMsg();
+
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    config.Provider = page.querySelector('#SmartSimilarProvider').value;
+                    config.TmdbApiKey = page.querySelector('#SmartSimilarTmdbKey').value.trim();
+                    config.ResultLimit = parseInt(page.querySelector('#SmartSimilarLimit').value, 10) || 16;
+                    config.ExcludeCollectionItems = page.querySelector('#SmartSimilarExcludeCollection').checked;
+                    config.ExcludeWatched = page.querySelector('#SmartSimilarExcludeWatched').checked;
+                    var minScore = parseInt(page.querySelector('#SmartSimilarMinScore').value, 10);
+                    config.MinScore = isNaN(minScore) ? 15 : Math.max(0, Math.min(100, minScore));
+
+                    ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    });
+                });
+            }
+
+            function testKey(page) {
+                var result = page.querySelector('#SmartSimilarTestResult');
+                result.textContent = 'Testing…';
+                result.style.color = '';
+
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('SmartSimilar/TestTmdbKey'),
+                    data: JSON.stringify({ ApiKey: page.querySelector('#SmartSimilarTmdbKey').value.trim() }),
+                    contentType: 'application/json',
+                    dataType: 'json'
+                }).then(function (response) {
+                    var ok = response.Ok !== undefined ? response.Ok : response.ok;
+                    result.textContent = response.Message || response.message || '';
+                    result.style.color = ok ? '#4caf50' : '#f44336';
+                }).catch(function () {
+                    result.textContent = 'The test request failed.';
+                    result.style.color = '#f44336';
+                });
+            }
+
+            var page = document.querySelector('#SmartSimilarConfigPage');
+
+            page.addEventListener('pageshow', function () {
+                loadPage(page);
+            });
+
+            page.querySelector('#SmartSimilarTestKey').addEventListener('click', function () {
+                testKey(page);
+            });
+
+            page.querySelector('#SmartSimilarConfigForm').addEventListener('submit', function (e) {
+                e.preventDefault();
+                save(page);
+                return false;
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.SmartSimilar</RootNamespace>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Must not be newer than the Jellyfin server this plugin is deployed to. -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Configuration\config.html" />
+    <EmbeddedResource Include="Web\smartsimilar.js" />
+    <EmbeddedResource Include="Web\smartsimilar.css" />
+  </ItemGroup>
+
+</Project>

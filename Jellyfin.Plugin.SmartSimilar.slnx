@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Jellyfin.Plugin.SmartSimilar/Jellyfin.Plugin.SmartSimilar.csproj" />
+  </Folder>
+</Solution>
