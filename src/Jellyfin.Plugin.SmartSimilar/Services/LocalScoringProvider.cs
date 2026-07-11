@@ -45,6 +45,13 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
 
         private sealed record CacheEntry(DateTime BuiltAt, IReadOnlyList<Guid> Ids);
 
+        // Materializing every Movie/Series item is the single biggest cost of a
+        // scoring pass on large libraries, and the list is identical for every
+        // anchor of the same kind - cache it per kind and user.
+        private readonly ConcurrentDictionary<string, CandidateEntry> m_candidateCache = new();
+
+        private sealed record CandidateEntry(DateTime BuiltAt, IReadOnlyList<BaseItem> Items);
+
         private readonly ILibraryManager m_libraryManager;
         private readonly IUserManager m_userManager;
         private readonly ILogger<LocalScoringProvider> m_logger;
@@ -107,14 +114,7 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
 
         private IReadOnlyList<Guid> ComputeScored(BaseItem anchor, Guid userId, PluginConfiguration config)
         {
-            var user = userId == Guid.Empty ? null : m_userManager.GetUserById(userId);
-
-            InternalItemsQuery query = user == null ? new InternalItemsQuery() : new InternalItemsQuery(user);
-            query.IncludeItemTypes = new[] { anchor is Series ? BaseItemKind.Series : BaseItemKind.Movie };
-            query.Recursive = true;
-            query.IsVirtualItem = false;
-
-            IReadOnlyList<BaseItem> candidates = m_libraryManager.GetItemList(query);
+            IReadOnlyList<BaseItem> candidates = GetCandidates(anchor is Series, userId);
 
             AnchorFeatures anchorFeatures = BuildAnchorFeatures(anchor);
 
@@ -169,6 +169,27 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             m_logger.LogDebug("Local scoring for {Anchor}: {Candidates} candidates, {Matches} above min score.",
                 anchor.Name, candidates.Count, result.Count);
             return result;
+        }
+
+        private IReadOnlyList<BaseItem> GetCandidates(bool isSeries, Guid userId)
+        {
+            string cacheKey = (isSeries ? "series" : "movie") + ":" + userId.ToString("N");
+            if (m_candidateCache.TryGetValue(cacheKey, out CandidateEntry? cached)
+                && DateTime.UtcNow - cached.BuiltAt < s_cacheTtl)
+            {
+                return cached.Items;
+            }
+
+            var user = userId == Guid.Empty ? null : m_userManager.GetUserById(userId);
+
+            InternalItemsQuery query = user == null ? new InternalItemsQuery() : new InternalItemsQuery(user);
+            query.IncludeItemTypes = new[] { isSeries ? BaseItemKind.Series : BaseItemKind.Movie };
+            query.Recursive = true;
+            query.IsVirtualItem = false;
+
+            IReadOnlyList<BaseItem> candidates = m_libraryManager.GetItemList(query);
+            m_candidateCache[cacheKey] = new CandidateEntry(DateTime.UtcNow, candidates);
+            return candidates;
         }
 
         private sealed record Scored(BaseItem Item, double Score);
