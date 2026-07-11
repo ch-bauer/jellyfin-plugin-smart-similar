@@ -11,6 +11,7 @@ namespace Jellyfin.Plugin.SmartSimilar
         {
             serviceCollection.AddSingleton<CollectionLookupService>();
             serviceCollection.AddSingleton<TmdbIdLookupService>();
+            serviceCollection.AddSingleton<PeopleCacheService>();
             serviceCollection.AddSingleton<LocalScoringProvider>();
             serviceCollection.AddSingleton<TmdbRecommendationsProvider>();
             serviceCollection.AddSingleton<SimilarItemsService>();

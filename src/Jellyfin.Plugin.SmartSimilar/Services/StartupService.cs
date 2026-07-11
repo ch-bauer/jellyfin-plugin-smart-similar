@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
 using Jellyfin.Plugin.SmartSimilar.Helpers;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -23,24 +24,64 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         private readonly ILogger<StartupService> m_logger;
         private readonly CollectionLookupService m_collectionLookup;
         private readonly TmdbIdLookupService m_tmdbIdLookup;
+        private readonly PeopleCacheService m_peopleCache;
+        private readonly LocalScoringProvider m_localProvider;
+        private readonly IUserManager m_userManager;
 
         public StartupService(
             ILogger<StartupService> logger,
             CollectionLookupService collectionLookup,
-            TmdbIdLookupService tmdbIdLookup)
+            TmdbIdLookupService tmdbIdLookup,
+            PeopleCacheService peopleCache,
+            LocalScoringProvider localProvider,
+            IUserManager userManager)
         {
             m_logger = logger;
             m_collectionLookup = collectionLookup;
             m_tmdbIdLookup = tmdbIdLookup;
+            m_peopleCache = peopleCache;
+            m_localProvider = localProvider;
+            m_userManager = userManager;
         }
 
         public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
             m_logger.LogInformation("Smart Similar startup. Registering file transformation.");
 
+            RegisterTransformation();
+
+            // Pre-warm every cache a request needs, so the first detail page
+            // after a restart is as fast as any other. The people warm-up is
+            // the long part (one DB query per movie/series, parallelized) and
+            // reports task progress.
             m_collectionLookup.Warm();
             m_tmdbIdLookup.Warm();
 
+            try
+            {
+                m_peopleCache.Warm(progress, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return Task.CompletedTask;
+            }
+            catch (Exception ex)
+            {
+                m_logger.LogWarning(ex, "Failed to warm the people cache.");
+            }
+
+            foreach (Guid warmUserId in m_userManager.GetUsersIds())
+            {
+                m_localProvider.WarmCandidates(warmUserId);
+            }
+
+            m_logger.LogInformation("Smart Similar caches warmed.");
+
+            return Task.CompletedTask;
+        }
+
+        private void RegisterTransformation()
+        {
             Assembly? fileTransformationAssembly =
                 AssemblyLoadContext.All.SelectMany(x => x.Assemblies).FirstOrDefault(x =>
                     x.FullName?.Contains(".FileTransformation") ?? false);
@@ -50,7 +91,7 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
                 m_logger.LogWarning(
                     "File Transformation plugin was not found. The Smart Similar plugin requires it to modify the web client. " +
                     "Install it from https://www.iamparadox.dev/jellyfin/plugins/manifest.json and restart Jellyfin.");
-                return Task.CompletedTask;
+                return;
             }
 
             Type? pluginInterfaceType =
@@ -61,7 +102,7 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             {
                 m_logger.LogWarning("File Transformation plugin was found but PluginInterface.RegisterTransformation was not. " +
                                     "The installed File Transformation version may be incompatible.");
-                return Task.CompletedTask;
+                return;
             }
 
             string payloadJson = JsonSerializer.Serialize(new
@@ -83,15 +124,13 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             {
                 m_logger.LogWarning("Could not find a Parse method on the transformation payload type '{PayloadType}'.",
                     payloadType.FullName);
-                return Task.CompletedTask;
+                return;
             }
 
             object? payload = parseMethod.Invoke(null, new object?[] { payloadJson });
             registerMethod.Invoke(null, new[] { payload });
 
             m_logger.LogInformation("Smart Similar transformation registered.");
-
-            return Task.CompletedTask;
         }
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()

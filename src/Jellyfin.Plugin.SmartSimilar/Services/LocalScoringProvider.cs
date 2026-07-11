@@ -9,10 +9,11 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.SmartSimilar.Services
 {
     /// <summary>
-    /// Ranks library items by metadata similarity to an anchor item. All signals
-    /// except people come straight off the in-memory candidate list, so a full
-    /// scan per request stays cheap; people (a DB query per item) are only
-    /// resolved for the best base-scored candidates and used to re-rank them.
+    /// Ranks library items by metadata similarity to an anchor item. All
+    /// signals come from in-memory data: the candidate list is cached per media
+    /// type and user (served stale while a background refresh runs, so requests
+    /// never block on a library scan), and people come from
+    /// <see cref="PeopleCacheService"/>, which is warmed at startup.
     /// </summary>
     public sealed class LocalScoringProvider
     {
@@ -29,15 +30,6 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         private const double WriterPoints = 4;
         private const double ActorPoints = 3;
 
-        /// <summary>Cap on how many top base-scored candidates get the (per-item DB query) people pass.</summary>
-        private const int PeopleRerankCap = 150;
-
-        /// <summary>Concurrent people queries during the re-rank pass.</summary>
-        private const int PeopleQueryParallelism = 8;
-
-        // A full scoring pass costs a candidate scan plus up to PeopleRerankCount
-        // people queries, so the ranking is kept for a while. Metadata changes
-        // show up after at most the TTL - the same trade-off as the other caches.
         private static readonly TimeSpan s_cacheTtl = TimeSpan.FromMinutes(10);
         private const int MaxCacheEntries = 256;
 
@@ -47,22 +39,27 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
 
         // Materializing every Movie/Series item is the single biggest cost of a
         // scoring pass on large libraries, and the list is identical for every
-        // anchor of the same kind - cache it per kind and user.
+        // anchor of the same kind - cache it per kind and user, serve it stale
+        // while a background refresh runs.
         private readonly ConcurrentDictionary<string, CandidateEntry> m_candidateCache = new();
+        private readonly ConcurrentDictionary<string, byte> m_candidateRefreshing = new();
 
         private sealed record CandidateEntry(DateTime BuiltAt, IReadOnlyList<BaseItem> Items);
 
         private readonly ILibraryManager m_libraryManager;
         private readonly IUserManager m_userManager;
+        private readonly PeopleCacheService m_peopleCache;
         private readonly ILogger<LocalScoringProvider> m_logger;
 
         public LocalScoringProvider(
             ILibraryManager libraryManager,
             IUserManager userManager,
+            PeopleCacheService peopleCache,
             ILogger<LocalScoringProvider> logger)
         {
             m_libraryManager = libraryManager;
             m_userManager = userManager;
+            m_peopleCache = peopleCache;
             m_logger = logger;
         }
 
@@ -73,9 +70,8 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         public IReadOnlyList<Guid> GetScored(BaseItem anchor, Guid userId, PluginConfiguration config)
         {
             // The ranking depends on the anchor, the user (library access
-            // filtering), the score threshold and the re-rank width (derived
-            // from the result limit) - key on all of them.
-            string cacheKey = $"{anchor.Id:N}:{userId:N}:{config.MinScore}:{config.ResultLimit}";
+            // filtering) and the score threshold - key on all three.
+            string cacheKey = $"{anchor.Id:N}:{userId:N}:{config.MinScore}";
             if (m_cache.TryGetValue(cacheKey, out CacheEntry? cached)
                 && DateTime.UtcNow - cached.BuiltAt < s_cacheTtl)
             {
@@ -85,6 +81,20 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             IReadOnlyList<Guid> scoredIds = ComputeScored(anchor, userId, config);
             StoreInCache(cacheKey, scoredIds);
             return scoredIds;
+        }
+
+        /// <summary>Fills the candidate caches ahead of the first request (called at startup).</summary>
+        public void WarmCandidates(Guid userId)
+        {
+            try
+            {
+                GetCandidates(isSeries: false, userId);
+                GetCandidates(isSeries: true, userId);
+            }
+            catch (Exception ex)
+            {
+                m_logger.LogWarning(ex, "Failed to warm the candidate cache for user {UserId}.", userId);
+            }
         }
 
         private void StoreInCache(string cacheKey, IReadOnlyList<Guid> ids)
@@ -126,34 +136,18 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
                     continue;
                 }
 
-                scored.Add(new Scored(candidate, BaseScore(anchorFeatures, candidate)));
+                // People lookups are dictionary hits after the startup warm-up,
+                // so every candidate gets the full score in one pass.
+                double score = BaseScore(anchorFeatures, candidate);
+                if (anchorFeatures.HasPeople)
+                {
+                    score += PeopleScore(anchorFeatures, candidate);
+                }
+
+                scored.Add(new Scored(candidate, score));
             }
 
             scored.Sort(CompareScored);
-
-            // People pass: only for the best base-scored candidates - people add
-            // at most 20 points, so anything far down the base ranking cannot
-            // reach the visible row anyway. Sized to the row, since each people
-            // lookup is a DB query; queried in parallel to keep cold requests fast.
-            int rerankCount = Math.Min(
-                Math.Min(PeopleRerankCap, Math.Max(config.ResultLimit * 4, 48)),
-                scored.Count);
-            if (anchorFeatures.HasPeople && rerankCount > 0)
-            {
-                double[] peopleScores = new double[rerankCount];
-                Parallel.For(
-                    0,
-                    rerankCount,
-                    new ParallelOptions { MaxDegreeOfParallelism = PeopleQueryParallelism },
-                    i => peopleScores[i] = PeopleScore(anchorFeatures, scored[i].Item));
-
-                for (int i = 0; i < rerankCount; i++)
-                {
-                    scored[i] = scored[i] with { Score = scored[i].Score + peopleScores[i] };
-                }
-
-                scored.Sort(CompareScored);
-            }
 
             List<Guid> result = new List<Guid>();
             foreach (Scored entry in scored)
@@ -174,12 +168,38 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
         private IReadOnlyList<BaseItem> GetCandidates(bool isSeries, Guid userId)
         {
             string cacheKey = (isSeries ? "series" : "movie") + ":" + userId.ToString("N");
-            if (m_candidateCache.TryGetValue(cacheKey, out CandidateEntry? cached)
-                && DateTime.UtcNow - cached.BuiltAt < s_cacheTtl)
+            if (m_candidateCache.TryGetValue(cacheKey, out CandidateEntry? cached))
             {
+                // Serve stale and refresh in the background - a request should
+                // never block on a full library scan.
+                if (DateTime.UtcNow - cached.BuiltAt > s_cacheTtl
+                    && m_candidateRefreshing.TryAdd(cacheKey, 0))
+                {
+                    Task.Run(() =>
+                    {
+                        try
+                        {
+                            LoadCandidates(cacheKey, isSeries, userId);
+                        }
+                        catch (Exception ex)
+                        {
+                            m_logger.LogWarning(ex, "Failed to refresh the candidate cache.");
+                        }
+                        finally
+                        {
+                            m_candidateRefreshing.TryRemove(cacheKey, out _);
+                        }
+                    });
+                }
+
                 return cached.Items;
             }
 
+            return LoadCandidates(cacheKey, isSeries, userId);
+        }
+
+        private IReadOnlyList<BaseItem> LoadCandidates(string cacheKey, bool isSeries, Guid userId)
+        {
             var user = userId == Guid.Empty ? null : m_userManager.GetUserById(userId);
 
             InternalItemsQuery query = user == null ? new InternalItemsQuery() : new InternalItemsQuery(user);
@@ -228,46 +248,16 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
 
         private AnchorFeatures BuildAnchorFeatures(BaseItem anchor)
         {
-            HashSet<string> directors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            HashSet<string> writers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            HashSet<string> actors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            try
-            {
-                foreach (PersonInfo person in m_libraryManager.GetPeople(anchor))
-                {
-                    if (string.IsNullOrEmpty(person.Name))
-                    {
-                        continue;
-                    }
-
-                    if (person.Type == PersonKind.Director && directors.Count < 2)
-                    {
-                        directors.Add(person.Name);
-                    }
-                    else if (person.Type == PersonKind.Writer && writers.Count < 2)
-                    {
-                        writers.Add(person.Name);
-                    }
-                    else if (person.Type == PersonKind.Actor && actors.Count < 5)
-                    {
-                        actors.Add(person.Name);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                m_logger.LogDebug(ex, "Could not resolve people for {Anchor}; scoring without people.", anchor.Name);
-            }
+            PeopleCacheService.PeopleEntry people = m_peopleCache.GetOrLoad(anchor);
 
             return new AnchorFeatures
             {
                 Genres = new HashSet<string>(anchor.Genres ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase),
                 Tags = new HashSet<string>(anchor.Tags ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase),
                 Studios = new HashSet<string>(anchor.Studios ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase),
-                Directors = directors,
-                Writers = writers,
-                Actors = actors,
+                Directors = new HashSet<string>(people.Directors.Take(2), StringComparer.OrdinalIgnoreCase),
+                Writers = new HashSet<string>(people.Writers.Take(2), StringComparer.OrdinalIgnoreCase),
+                Actors = new HashSet<string>(people.TopActors, StringComparer.OrdinalIgnoreCase),
                 Year = anchor.ProductionYear,
                 CommunityRating = anchor.CommunityRating,
                 OfficialRating = anchor.OfficialRating
@@ -318,40 +308,31 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
 
         private double PeopleScore(AnchorFeatures anchor, BaseItem candidate)
         {
+            PeopleCacheService.PeopleEntry people = m_peopleCache.GetOrLoad(candidate);
             double score = 0;
 
-            try
+            foreach (string director in people.Directors)
             {
-                int candidateActors = 0;
-                foreach (PersonInfo person in m_libraryManager.GetPeople(candidate))
+                if (anchor.Directors.Contains(director))
                 {
-                    if (string.IsNullOrEmpty(person.Name))
-                    {
-                        continue;
-                    }
-
-                    if (person.Type == PersonKind.Director && anchor.Directors.Contains(person.Name))
-                    {
-                        score += DirectorPoints;
-                    }
-                    else if (person.Type == PersonKind.Writer && anchor.Writers.Contains(person.Name))
-                    {
-                        score += WriterPoints;
-                    }
-                    else if (person.Type == PersonKind.Actor)
-                    {
-                        // Only the candidate's top billing can match the anchor's top actors.
-                        candidateActors++;
-                        if (candidateActors <= 5 && anchor.Actors.Contains(person.Name))
-                        {
-                            score += ActorPoints;
-                        }
-                    }
+                    score += DirectorPoints;
                 }
             }
-            catch (Exception)
+
+            foreach (string writer in people.Writers)
             {
-                return 0;
+                if (anchor.Writers.Contains(writer))
+                {
+                    score += WriterPoints;
+                }
+            }
+
+            foreach (string actor in people.TopActors)
+            {
+                if (anchor.Actors.Contains(actor))
+                {
+                    score += ActorPoints;
+                }
             }
 
             return Math.Min(PeopleWeight, score);
