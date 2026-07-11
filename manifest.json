@@ -9,6 +9,14 @@
     "imageUrl": "https://raw.githubusercontent.com/ch-bauer/jellyfin-plugin-smart-similar/main/images/icon.png",
     "versions": [
       {
+        "version": "1.0.5.0",
+        "changelog": "Cache the candidate list per media type and user - cold requests no longer rescan the whole library.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/ch-bauer/jellyfin-plugin-smart-similar/releases/download/v1.0.5.0/smart-similar_1.0.5.0.zip",
+        "checksum": "fad7c744914d648fc173c07a2cb14385",
+        "timestamp": "2026-07-11T00:00:00Z"
+      },
+      {
         "version": "1.0.4.0",
         "changelog": "Much faster cold requests: the people re-rank now runs in parallel and only over as many candidates as the row can use.",
         "targetAbi": "10.11.0.0",
