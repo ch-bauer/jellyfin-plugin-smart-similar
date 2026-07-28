@@ -1,4 +1,4 @@
-# Jellyfin Smart Similar Plugin
+# Jellyfin Smart Similar Plugin (Proof of Concept)
 
 Replaces the native **"More Like This"** section on movie and series detail pages with a
 similar-items row that actually finds similar items. The section keeps the native look
