@@ -1,4 +1,7 @@
-# Jellyfin Smart Similar Plugin (Proof of Concept)
+<div align="center">
+  <img src="images/icon.png" alt="Jellyfin Smart Similar Plugin" width="128" />
+  <h1>Jellyfin Smart Similar Plugin (Proof of Concept)</h1>
+</div>
 
 Replaces the native **"More Like This"** section on movie and series detail pages with a
 similar-items row that actually finds similar items. The section keeps the native look
