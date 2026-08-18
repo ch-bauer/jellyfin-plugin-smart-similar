@@ -3,6 +3,16 @@
   <h1>Jellyfin Smart Similar Plugin (Proof of Concept)</h1>
 </div>
 
+> [!CAUTION]
+> **This is a proof of concept, written with AI.** It is purely for testing, and there are
+> many items that are known to be incorrect or broken. It is not advisable to use this on a
+> non-test server.
+>
+> For this reason it is offered as is, with **no guarantee of support, bug fixes, or
+> troubleshooting**.
+>
+> **It is NOT recommended to fork or build on top of this plugin!**
+
 Replaces the native **"More Like This"** section on movie and series detail pages with a
 similar-items row that actually finds similar items. The section keeps the native look
 (same title, position, cards, hover overlay, scrolling) — only the results get better.
