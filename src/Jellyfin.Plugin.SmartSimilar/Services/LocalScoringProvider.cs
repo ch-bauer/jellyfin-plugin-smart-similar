@@ -264,6 +264,108 @@ namespace Jellyfin.Plugin.SmartSimilar.Services
             };
         }
 
+        /// <summary>
+        /// Scores every candidate against one anchor and keeps the numbers and the
+        /// shared metadata instead of discarding them, best match first. Unlike
+        /// <see cref="GetScored"/> this is not cached and applies no exclusions:
+        /// callers pass several anchors and merge the results themselves. The
+        /// expensive part - materialising the candidate list - still comes from the
+        /// shared candidate cache, so a multi-anchor request scans the library once.
+        /// </summary>
+        public IReadOnlyList<ScoredCandidate> GetScoredDetailed(BaseItem anchor, Guid userId, double minScore)
+        {
+            IReadOnlyList<BaseItem> candidates = GetCandidates(anchor is Series, userId);
+            AnchorFeatures anchorFeatures = BuildAnchorFeatures(anchor);
+
+            List<(BaseItem Item, double Score, SharedSignals Shared)> scored = new();
+            foreach (BaseItem candidate in candidates)
+            {
+                if (candidate.Id == anchor.Id)
+                {
+                    continue;
+                }
+
+                double score = BaseScore(anchorFeatures, candidate);
+                if (anchorFeatures.HasPeople)
+                {
+                    score += PeopleScore(anchorFeatures, candidate);
+                }
+
+                if (score < minScore)
+                {
+                    continue;
+                }
+
+                scored.Add((candidate, score, SharedOf(anchorFeatures, candidate)));
+            }
+
+            scored.Sort(static (a, b) => CompareScored(new Scored(a.Item, a.Score), new Scored(b.Item, b.Score)));
+
+            List<ScoredCandidate> result = new List<ScoredCandidate>(scored.Count);
+            foreach ((BaseItem item, double score, SharedSignals shared) in scored)
+            {
+                result.Add(new ScoredCandidate(item.Id, score, shared));
+            }
+
+            return result;
+        }
+
+        /// <summary>Names the metadata behind a score, for a caller that wants to explain it.</summary>
+        private SharedSignals SharedOf(AnchorFeatures anchor, BaseItem candidate)
+        {
+            List<string> people = new List<string>();
+            if (anchor.HasPeople)
+            {
+                PeopleCacheService.PeopleEntry candidatePeople = m_peopleCache.GetOrLoad(candidate);
+                AddShared(people, anchor.Directors, candidatePeople.Directors);
+                AddShared(people, anchor.Writers, candidatePeople.Writers);
+                AddShared(people, anchor.Actors, candidatePeople.TopActors);
+            }
+
+            int? yearGap = anchor.Year.HasValue && candidate.ProductionYear.HasValue
+                ? Math.Abs(anchor.Year.Value - candidate.ProductionYear.Value)
+                : null;
+
+            return new SharedSignals(
+                SharedValues(anchor.Genres, candidate.Genres),
+                SharedValues(anchor.Tags, candidate.Tags),
+                people,
+                SharedValues(anchor.Studios, candidate.Studios),
+                yearGap,
+                !string.IsNullOrEmpty(anchor.OfficialRating)
+                    && string.Equals(anchor.OfficialRating, candidate.OfficialRating, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static void AddShared(List<string> into, HashSet<string> anchorNames, IEnumerable<string> candidateNames)
+        {
+            foreach (string name in candidateNames)
+            {
+                if (anchorNames.Contains(name) && !into.Contains(name, StringComparer.OrdinalIgnoreCase))
+                {
+                    into.Add(name);
+                }
+            }
+        }
+
+        private static IReadOnlyList<string> SharedValues(HashSet<string> anchorValues, string[]? candidateValues)
+        {
+            if (anchorValues.Count == 0 || candidateValues == null || candidateValues.Length == 0)
+            {
+                return Array.Empty<string>();
+            }
+
+            List<string> shared = new List<string>();
+            foreach (string value in candidateValues)
+            {
+                if (anchorValues.Contains(value))
+                {
+                    shared.Add(value);
+                }
+            }
+
+            return shared;
+        }
+
         private static double BaseScore(AnchorFeatures anchor, BaseItem candidate)
         {
             double score = 0;
