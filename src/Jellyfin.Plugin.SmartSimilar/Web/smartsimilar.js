@@ -151,15 +151,6 @@
         }
     }
 
-    function removeNativeSimilarSection(scope) {
-        var sections = scope.querySelectorAll('#similarCollapsible');
-        for (var i = 0; i < sections.length; i++) {
-            if (sections[i].parentElement) {
-                sections[i].parentElement.removeChild(sections[i]);
-            }
-        }
-    }
-
     function deactivate(page) {
         removeSections(page);
     }
@@ -183,10 +174,6 @@
         if (!page) {
             return;
         }
-
-        // Jellyfin may mount the native row after the detail page appears.
-        // Remove it before it can enter layout or retain any child images.
-        removeNativeSimilarSection(page);
 
         if (page.getAttribute(ITEM_ATTR) === itemId) {
             return;

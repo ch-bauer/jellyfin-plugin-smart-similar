@@ -1,7 +1,9 @@
 /* Smart Similar plugin styles */
 
-/* Smart Similar owns the replacement row. Keep Jellyfin's native Similar row
-   out of the layout without tying this rule to Smart Similar's result state. */
-.itemDetailPage #similarCollapsible {
+/* Keep Jellyfin's native Similar results out of layout while retaining its
+   empty DOM anchor for integrations such as Enhanced/Seerr that position their
+   recommendation row relative to the native section. The native request is
+   blocked by smartsimilar.js, so this does not load native poster images. */
+.itemDetailPage #similarCollapsible:not(.jellyseerr-details-section) {
     display: none !important;
 }
