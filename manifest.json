@@ -13,7 +13,7 @@
         "changelog": "Keep Jellyfin's native Similar container as an empty anchor for Enhanced/Seerr while suppressing native Similar requests and poster loading.",
         "targetAbi": "10.11.0.0",
         "sourceUrl": "https://github.com/ch-bauer/jellyfin-plugin-smart-similar/releases/download/v1.2.2.0/smart-similar_1.2.2.0.zip",
-        "checksum": "3e070d73cef80aaf4e6b629363e28c09",
+        "checksum": "fadf4f87bfb69b78c23b2a8620989a00",
         "timestamp": "2026-09-08T00:00:00Z"
       },
       {
