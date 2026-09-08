@@ -1,6 +1,6 @@
 {
   "category": "General",
-  "changelog": "Smart Similar now owns its title and placement independently from Jellyfin's native Similar section. Native Similar API requests and the native section container are suppressed so its results and poster images do not load alongside Smart Similar.",
+  "changelog": "Keep Jellyfin's native Similar container as an empty anchor for Enhanced/Seerr while suppressing native Similar requests and poster loading.",
   "description": "Replaces the native \"More Like This\" section with better similarity results from a selectable provider, excluding items of the same collection.",
   "guid": "61b616fa-7ba8-4262-b2a9-fae29b015930",
   "imageUrl": "https://raw.githubusercontent.com/ch-bauer/jellyfin-plugin-smart-similar/main/images/icon.png",
@@ -9,7 +9,7 @@
   "owner": "Christian",
   "targetAbi": "10.11.0.0",
   "timestamp": "2026-09-08T00:00:00.000Z",
-  "version": "1.2.1.0",
+  "version": "1.2.2.0",
   "status": "Active",
   "autoUpdate": false
 }
