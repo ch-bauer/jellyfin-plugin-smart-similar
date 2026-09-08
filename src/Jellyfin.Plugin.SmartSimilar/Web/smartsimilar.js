@@ -3,7 +3,6 @@
     'use strict';
 
     var ITEM_ATTR = 'data-smartsimilar-item';
-    var ACTIVE_ATTR = 'data-smartsimilar-active';
     var CACHE_TTL_MS = 30000;
     var cache = new Map(); // itemId -> { time, promise }
     var observerTimer = null;
@@ -12,6 +11,49 @@
         try {
             console.debug.apply(console, ['[SmartSimilar]'].concat([].slice.call(arguments)));
         } catch (e) { /* ignore */ }
+    }
+
+    function isNativeSimilarUrl(input) {
+        var url = input && input.url ? input.url : String(input || '');
+        return /\/(?:Items|Movies|Shows|Albums|Artists|Trailers)\/[^/?]+\/Similar(?:[/?]|$)/i.test(url);
+    }
+
+    function emptySimilarResponse() {
+        return new Response(JSON.stringify({ Items: [], TotalRecordCount: 0 }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        });
+    }
+
+    function suppressNativeSimilarRequests() {
+        if (window.__smartSimilarNativeRequestPatch) {
+            return;
+        }
+
+        var originalFetch = window.fetch;
+        if (typeof originalFetch === 'function') {
+            window.fetch = function (input, init) {
+                if (isNativeSimilarUrl(input)) {
+                    log('blocked native Similar request', input);
+                    return Promise.resolve(emptySimilarResponse());
+                }
+                return originalFetch.call(this, input, init);
+            };
+        }
+
+        var apiClient = window.ApiClient;
+        if (apiClient && typeof apiClient.getJSON === 'function') {
+            var originalGetJSON = apiClient.getJSON;
+            apiClient.getJSON = function (url, options) {
+                if (isNativeSimilarUrl(url)) {
+                    log('blocked native Similar API request', url);
+                    return Promise.resolve({ Items: [], TotalRecordCount: 0 });
+                }
+                return originalGetJSON.call(this, url, options);
+            };
+        }
+
+        window.__smartSimilarNativeRequestPatch = true;
     }
 
     function escapeHtml(text) {
@@ -109,8 +151,16 @@
         }
     }
 
+    function removeNativeSimilarSection(scope) {
+        var sections = scope.querySelectorAll('#similarCollapsible');
+        for (var i = 0; i < sections.length; i++) {
+            if (sections[i].parentElement) {
+                sections[i].parentElement.removeChild(sections[i]);
+            }
+        }
+    }
+
     function deactivate(page) {
-        page.removeAttribute(ACTIVE_ATTR);
         removeSections(page);
     }
 
@@ -130,19 +180,20 @@
         var dataPromise = fetchData(itemId);
 
         var page = getVisibleDetailPage();
-        if (!page || page.getAttribute(ITEM_ATTR) === itemId) {
+        if (!page) {
+            return;
+        }
+
+        // Jellyfin may mount the native row after the detail page appears.
+        // Remove it before it can enter layout or retain any child images.
+        removeNativeSimilarSection(page);
+
+        if (page.getAttribute(ITEM_ATTR) === itemId) {
             return;
         }
 
         page.setAttribute(ITEM_ATTR, itemId);
         removeSections(page);
-
-        // Hide the native "More Like This" section optimistically: it starts out
-        // hidden anyway and only appears after its own fetch, so claiming it
-        // before our data arrives prevents any flicker. If the plugin has
-        // nothing for this item, the attribute is removed and the native
-        // section behaves as if the plugin wasn't there.
-        page.setAttribute(ACTIVE_ATTR, '');
 
         dataPromise.then(function (data) {
             // Bail if the user navigated elsewhere in the meantime.
@@ -155,9 +206,8 @@
                 return;
             }
 
-            // For supported item types the plugin owns the row - even with zero
-            // results the native section stays hidden (its results are exactly
-            // what this plugin exists to replace, e.g. collection siblings).
+            // Smart Similar is independent of the native row. If it has ranked
+            // results, render its own section alongside Jellyfin's section.
             removeSections(page);
             if (data.items.length) {
                 insertSection(page, data.items, apiClient);
@@ -303,15 +353,47 @@
         return html;
     }
 
-    /**
-     * The localized section title ("More Like This" / "Ähnliches" / ...) is
-     * present in the native section's static markup even while that section is
-     * hidden, so it can be reused without ever showing the native section.
-     */
-    function getSectionTitle(page) {
-        var nativeTitle = page.querySelector('#similarCollapsible .sectionTitle');
-        var text = nativeTitle && nativeTitle.textContent ? nativeTitle.textContent.trim() : '';
-        return text || 'More Like This';
+    // Smart Similar owns its title instead of borrowing it from Jellyfin's
+    // native Similar section. This keeps the plugin independent of native
+    // section markup and of the server's translated static HTML.
+    var SECTION_TITLES = {
+        de: 'Ähnliches',
+        en: 'More Like This',
+        es: 'Más como esto',
+        fr: 'Similaire',
+        it: 'Simili',
+        nl: 'Vergelijkbaar',
+        pl: 'Podobne',
+        pt: 'Semelhantes',
+        ru: 'Похожее'
+    };
+
+    function getSectionTitle() {
+        var language = (document.documentElement.lang || navigator.language || 'en')
+            .toLowerCase().split('-')[0];
+        return SECTION_TITLES[language] || SECTION_TITLES.en;
+    }
+
+    function insertAfter(anchor, node) {
+        var parent = anchor && anchor.parentElement;
+        if (!parent) {
+            return false;
+        }
+
+        if (anchor.nextSibling) {
+            parent.insertBefore(node, anchor.nextSibling);
+        } else {
+            parent.appendChild(node);
+        }
+        return true;
+    }
+
+    function findInsertionAnchor(page) {
+        // Keep Smart Similar in the same general detail-page area while never
+        // depending on Jellyfin's native Similar section.
+        return page.querySelector('#scenesCollapsible')
+            || page.querySelector('#castCollapsible')
+            || page.querySelector('.peopleSection');
     }
 
     function insertSection(page, items, apiClient) {
@@ -327,7 +409,7 @@
 
         var html = '';
         html += '<h2 class="sectionTitle sectionTitle-cards padded-right">'
-            + escapeHtml(getSectionTitle(page)) + '</h2>';
+            + escapeHtml(getSectionTitle()) + '</h2>';
         html += '<div is="emby-scroller" class="padded-top-focusscale padded-bottom-focusscale no-padding"'
             + ' data-mousewheel="false" data-centerfocus="card">';
         html += '<div is="emby-itemscontainer" class="focuscontainer-x itemsContainer scrollSlider">';
@@ -339,15 +421,10 @@
         html += '</div></div>';
         section.innerHTML = html;
 
-        // Take the native section's exact place; fall back to the cast section
-        // (native puts "More Like This" right above it) or the top.
-        var nativeSection = page.querySelector('#similarCollapsible');
-        var cast = page.querySelector('#castCollapsible') || page.querySelector('.peopleSection');
-        if (nativeSection && nativeSection.parentElement) {
-            nativeSection.parentElement.insertBefore(section, nativeSection);
-        } else if (cast && cast.parentElement) {
-            cast.parentElement.insertBefore(section, cast);
-        } else {
+        // Place the plugin-owned section after Scenes, then Cast/People. The
+        // native Similar section is deliberately not used as an anchor.
+        var anchor = findInsertionAnchor(page);
+        if (!insertAfter(anchor, section)) {
             content.insertBefore(section, content.firstChild);
         }
 
@@ -372,6 +449,7 @@
             setTimeout(start, 100);
             return;
         }
+        suppressNativeSimilarRequests();
         observer.observe(document.body, {
             childList: true,
             subtree: true,

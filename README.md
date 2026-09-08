@@ -80,13 +80,14 @@ section is left untouched.
   (via reflection, the documented integration path). The transformation inlines this plugin's
   JS/CSS into the page head — jellyfin-web itself is never modified on disk.
 - The injected script watches for the item detail view and asks the plugin's API
-  (`GET /SmartSimilar/Items?itemId=…&userId=…`) for the ranked similar item ids. While the
-  plugin owns the page, the native "More Like This" section is hidden via a scoped CSS rule;
-  if the plugin has nothing to show, the native section is restored untouched.
+  (`GET /SmartSimilar/Items?itemId=…&userId=…`) for the ranked similar item ids. The native
+  Jellyfin Similar section is suppressed with a scoped CSS rule; Smart Similar renders its own
+  independent row in its place.
 - The items are then fetched through the standard items API (so permissions, user data and
   image tags are respected), re-ordered to the ranking, and rendered with Jellyfin's own
-  card markup and `emby-scroller` / `emby-itemscontainer` elements — including the localized
-  native section title, read from the (hidden) native section.
+  card markup and `emby-scroller` / `emby-itemscontainer` elements. Smart Similar owns its
+  section title and inserts after the scenes section, or after cast/people when scenes is absent;
+  it does not depend on the native Similar section's markup or position.
 - On the server, ranking comes from the configured provider. Collection membership is answered
   by an in-memory BoxSet reverse map, and TMDb ids are mapped to library items by an in-memory
   provider-id map — both caches are event-invalidated and warmed at startup. TMDb responses are
